@@ -71,7 +71,9 @@ class PPO(object):
                 self.sess.run(self.update_oldpi_op)  # copy pi to old pi
                 data = [QUEUE.get() for _ in
                         range(QUEUE.qsize())]  # collect data from all workers
+                # print('data0', data)
                 data = np.vstack(data)
+                # print('data1', data)
                 s, a, r = data[:, :S_DIM], data[:, S_DIM: S_DIM + A_DIM], data[:,
                                                                           -1:]
                 adv = self.sess.run(self.advantage, {self.tfs: s, self.tfdc_r: r})
