@@ -4,11 +4,14 @@ import matplotlib.pyplot as plt
 import gym
 import ray
 from ray.experimental.tf_utils import TensorFlowVariables
+import time
 
-N_WORKERS = 10
+N_WORKERS = 1
 ITERATIONS = 250
+N_TEST = 3
+ITERVAL = 10
 EP_MAX = 200
-EP_LEN = 200
+EP_LEN = 500
 GAMMA = 0.9
 A_LR = 0.0001
 C_LR = 0.0002
@@ -185,6 +188,9 @@ def main():
     """
     print("Running Asynchronous Parameter Server Training.")
     test_ppo = PPO()
+    test_count = 0
+    test_env = gym.make(GAME).unwrapped
+
     ray.init()
     ps = ParameterServer.remote()
     workers = [DataWorker.remote() for _ in range(N_WORKERS)]
@@ -194,6 +200,7 @@ def main():
     for worker in workers:
         datas[worker.compute_transitions.remote(current_weights)] = worker
 
+    time0 = time.time()
     for i in range(ITERATIONS * N_WORKERS):
         ready_list, _ = ray.wait(list(datas))
         ready_id = ready_list[0]
@@ -202,6 +209,26 @@ def main():
         # update PS with worker transitions
         current_weights = ps.update_model.remote(ready_id)
         datas[worker.compute_transitions.remote(current_weights)] = worker
+
+        # evalute temporal performance
+        time1 = time.time()
+        if (time1 - time0) > ITERVAL:
+            test_count += 1
+            test_steps = 0
+            weights = ray.get(current_weights)
+            # print(current_weights)
+            test_ppo.set_weights(weights)
+
+            for i in range(N_TEST):
+                s = test_env.reset()
+                for _ in range(10000):
+                    test_steps += 1
+                    a = test_ppo.choose_action(s)
+                    s_, r, done, _ = test_env.step(a)
+                    if done:
+                        break
+            print('{} round, {} tests, {} steps'.format(test_count, N_TEST, test_steps))
+            time0 = time.time()
 
 
 if __name__ == "__main__":
