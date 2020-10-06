@@ -123,12 +123,14 @@ class Worker(object):
                     ROLLING_EVENT.wait()  # wait until PPO is updated
                     buffer_s, buffer_a, buffer_r = [], [], []  # clear history buffer, use new policy to collect data
                 a = self.ppo.choose_action(s)
+                print(s, a, '\n')
                 s_, r, done, _ = self.env.step(a)
                 buffer_s.append(s)
                 buffer_a.append(a)
                 buffer_r.append((r + 8) / 8)  # normalize reward, find to be useful
                 s = s_
                 ep_r += r
+                # print(r)
 
                 GLOBAL_UPDATE_COUNTER += 1  # count to minimum batch size, no need to wait other workers
                 if t == EP_LEN - 1 or GLOBAL_UPDATE_COUNTER >= MIN_BATCH_SIZE:

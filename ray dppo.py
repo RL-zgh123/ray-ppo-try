@@ -6,8 +6,8 @@ import ray
 from ray.experimental.tf_utils import TensorFlowVariables
 import time
 
-N_WORKERS = 1
-ITERATIONS = 250
+N_WORKERS = 5
+ITERATIONS = 250000
 N_TEST = 3
 ITERVAL = 10
 EP_MAX = 200
@@ -121,6 +121,7 @@ class PPO(object):
              range(A_UPDATE_STEPS)]
             [self.sess.run(self.ctrain_op, {self.tfs: bs, self.tfdc_r: br}) for _ in
              range(C_UPDATE_STEPS)]
+            print()
 
     def get_weights(self):
         return [self.a_variables.get_weights(), self.c_variables.get_weights()]
@@ -214,20 +215,20 @@ def main():
         time1 = time.time()
         if (time1 - time0) > ITERVAL:
             test_count += 1
-            test_steps = 0
+            ep_r = 0
             weights = ray.get(current_weights)
-            # print(current_weights)
             test_ppo.set_weights(weights)
 
             for i in range(N_TEST):
                 s = test_env.reset()
-                for _ in range(10000):
-                    test_steps += 1
+                for _ in range(200):
                     a = test_ppo.choose_action(s)
                     s_, r, done, _ = test_env.step(a)
+                    ep_r += r
+                    print(a, s, r)
                     if done:
                         break
-            print('{} round, {} tests, {} steps'.format(test_count, N_TEST, test_steps))
+            print('{} round, {} tests, {} points'.format(test_count, N_TEST, ep_r))
             time0 = time.time()
 
 
