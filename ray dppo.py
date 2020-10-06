@@ -29,8 +29,8 @@ class PPO(object):
         self._build_cnet('critic')
 
         # build actor net
-        pi, pi_params = self._build_anet('pi', trainable=True)
-        oldpi, oldpi_params = self._build_anet('oldpi', trainable=False)
+        pi, pi_params, self.sigma, self.mu = self._build_anet('pi', trainable=True)
+        oldpi, oldpi_params, _, _ = self._build_anet('oldpi', trainable=False)
         self.sample_op = tf.squeeze(pi.sample(1), axis=0)
 
         # build loss function
@@ -62,7 +62,7 @@ class PPO(object):
             sigma = tf.layers.dense(l1, A_DIM, tf.nn.softplus, trainable=trainable)
             norm_dist = tf.distributions.Normal(loc=mu, scale=sigma)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
-        return norm_dist, params
+        return norm_dist, params, sigma, mu
 
     def _build_cnet(self, name):
         with tf.variable_scope(name):
@@ -98,7 +98,8 @@ class PPO(object):
 
     def choose_action(self, s):
         s = s[np.newaxis, :]
-        a = self.sess.run(self.sample_op, {self.tfs: s})
+        a, sigma, mu = self.sess.run([self.sample_op, self.sigma, self.mu], {self.tfs: s})
+        print('a', a, 'sigma', sigma, 'mu', mu, 's', s)
         return np.clip(a[0], -2, 2)
 
     def get_v(self, s):
@@ -153,13 +154,16 @@ class DataWorker(object):
         buffer_s, buffer_a, buffer_r = [], [], []
         transitions = []
         s = self.env.reset()
+        done = False
         for i in range(EP_LEN):
             a = self.local_ppo.choose_action(s)
+
             s_, r, done, _ = self.env.step(a)
+            print(s, a, s_, done, '\n')
             buffer_s.append(s)
             buffer_a.append(a)
             buffer_r.append((r + 8) / 8)
-            s = s_ if not done else self.env.reset()
+            s = s_ #if not done else self.env.reset()
 
             if i % BATCH == 0 or i == EP_LEN - 1:
                 # compute discounted reward
@@ -200,6 +204,7 @@ def main():
         worker = datas.pop(ready_id)
 
         # update PS with worker transitions
+        print('updating')
         current_weights = ps.update_model.remote(ready_id)
         datas[worker.compute_transitions.remote(current_weights)] = worker
 
