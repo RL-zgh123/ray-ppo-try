@@ -29,8 +29,8 @@ class PPO(object):
         self._build_cnet('critic')
 
         # build actor net
-        pi, pi_params, self.sigma, self.mu = self._build_anet('pi', trainable=True)
-        oldpi, oldpi_params, _, _ = self._build_anet('oldpi', trainable=False)
+        pi, pi_params, self.sigma, self.mu, self.l1, self.ts = self._build_anet('pi', trainable=True)
+        oldpi, oldpi_params, _, _, _, _ = self._build_anet('oldpi', trainable=False)
         self.sample_op = tf.squeeze(pi.sample(1), axis=0)
 
         # build loss function
@@ -58,11 +58,11 @@ class PPO(object):
     def _build_anet(self, name, trainable):
         with tf.variable_scope(name):
             l1 = tf.layers.dense(self.tfs, 200, tf.nn.relu, trainable=trainable)
-            mu = 2 * tf.layers.dense(l1, A_DIM, tf.nn.tanh, trainable=trainable)
-            sigma = tf.layers.dense(l1, A_DIM, tf.nn.softplus, trainable=trainable)
+            mu = 2 * tf.layers.dense(l1, A_DIM, tf.nn.relu, trainable=trainable)
+            sigma = tf.layers.dense(l1, A_DIM, tf.nn.relu, trainable=trainable)
             norm_dist = tf.distributions.Normal(loc=mu, scale=sigma)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
-        return norm_dist, params, sigma, mu
+        return norm_dist, params, sigma, mu, l1, self.tfs
 
     def _build_cnet(self, name):
         with tf.variable_scope(name):
@@ -98,8 +98,10 @@ class PPO(object):
 
     def choose_action(self, s):
         s = s[np.newaxis, :]
-        a, sigma, mu = self.sess.run([self.sample_op, self.sigma, self.mu], {self.tfs: s})
-        print('a', a, 'sigma', sigma, 'mu', mu, 's', s)
+        a, sigma, mu, l1, _ = self.sess.run([self.sample_op, self.sigma, self.mu, self.l1, self.ts], {self.tfs: s})
+        print('a', a, 'sigma', sigma, 'mu', mu, 's', s, 'l1', l1[0][0])
+
+
         return np.clip(a[0], -2, 2)
 
     def get_v(self, s):
@@ -119,6 +121,8 @@ class PPO(object):
              range(A_UPDATE_STEPS)]
             [self.sess.run(self.ctrain_op, {self.tfs: bs, self.tfdc_r: br}) for _ in
              range(C_UPDATE_STEPS)]
+            print('update')
+            print(self.sess.run([self.aloss, self.closs], {self.tfs: bs, self.tfa: ba, self.tfadv: adv, self.tfdc_r: br}))
 
     def get_weights(self):
         return [self.a_variables.get_weights(), self.c_variables.get_weights()]
