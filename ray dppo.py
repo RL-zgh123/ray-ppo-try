@@ -4,9 +4,12 @@ import matplotlib.pyplot as plt
 import gym
 import ray
 from ray.experimental.tf_utils import TensorFlowVariables
+import time
 
 N_WORKERS = 10
-ITERATIONS = 250
+ITERATIONS = 250000
+ITERVAL = 30
+N_TEST = 3
 EP_MAX = 200
 EP_LEN = 200
 GAMMA = 0.9
@@ -32,12 +35,12 @@ class PPO(object):
         self._build_cnet('critic')
 
         # build actor net
-        self.pi, pi_params, self.sigma, self.mu, self.l1, self.ts = self._build_anet('pi', trainable=True)
-        self.oldpi, oldpi_params, _, _, _, _ = self._build_anet('oldpi', trainable=False)
-        self.sample_op = tf.squeeze(self.pi.sample(1), axis=0)
+        pi, pi_params = self._build_anet('pi', trainable=True)
+        oldpi, oldpi_params = self._build_anet('oldpi', trainable=False)
+        self.sample_op = tf.squeeze(pi.sample(1), axis=0)
 
         # build loss function
-        self._build_loss_function('loss')
+        self._build_loss_function('loss', pi, oldpi)
 
         # update oldpi by pi
         with tf.variable_scope('update_oldpi'):
@@ -75,7 +78,7 @@ class PPO(object):
                                     trainable=trainable)
             norm_dist = tf.distributions.Normal(loc=mu, scale=sigma)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
-        return norm_dist, params, sigma, mu, l1, self.tfs
+        return norm_dist, params
 
     def _build_cnet(self, name):
         with tf.variable_scope(name):
@@ -85,16 +88,13 @@ class PPO(object):
                             bias_initializer=self.b_init)  # state-value
             self.advantage = self.tfdc_r - self.v
 
-    def _build_loss_function(self, name):
+    def _build_loss_function(self, name, pi, oldpi):
         with tf.variable_scope('name'):
             with tf.variable_scope('atrain'):
-                a0 = tf.constant(1e-4)
-                self.ratio = self.pi.prob(self.tfa) / (self.oldpi.prob(self.tfa) + a0)
-                # self.pi = pi.prob(self.tfa)
-                # self.oldpi = oldpi.prob(self.tfa)
-                surr = self.ratio * self.tfadv
+                ratio = pi.prob(self.tfa) / oldpi.prob(self.tfa)
+                surr = ratio * self.tfadv
                 self.aloss = -tf.reduce_mean(
-                    tf.minimum(surr, tf.clip_by_value(self.ratio, 1. - METHOD['epsilon'],
+                    tf.minimum(surr, tf.clip_by_value(ratio, 1. - METHOD['epsilon'],
                                                       1. + METHOD[
                                                           'epsilon']) * self.tfadv))
                 self.actor_opt = tf.train.AdamOptimizer(A_LR)
@@ -115,10 +115,7 @@ class PPO(object):
 
     def choose_action(self, s):
         s = s[np.newaxis, :]
-        a, sigma, mu, l1, _ = self.sess.run([self.sample_op, self.sigma, self.mu, self.l1, self.ts], {self.tfs: s})
-        print('a', a, 'sigma', sigma, 'mu', mu, 's', s, 'l1', l1[0][0])
-
-
+        a = self.sess.run(self.sample_op, {self.tfs: s})
         return np.clip(a[0], -2, 2)
 
     def get_v(self, s):
@@ -138,8 +135,8 @@ class PPO(object):
              range(A_UPDATE_STEPS)]
             [self.sess.run(self.ctrain_op, {self.tfs: bs, self.tfdc_r: br}) for _ in
              range(C_UPDATE_STEPS)]
-            print('update')
-            print(self.sess.run([self.aloss, self.ratio, self.tfa], {self.tfs: bs, self.tfa: ba, self.tfadv: adv, self.tfdc_r: br}))
+            # print('update')
+            # print(self.sess.run([self.aloss, self.ratio, self.tfa], {self.tfs: bs, self.tfa: ba, self.tfadv: adv, self.tfdc_r: br}))
 
     def get_weights(self):
         return [self.a_variables.get_weights(), self.c_variables.get_weights()]
@@ -180,7 +177,6 @@ class DataWorker(object):
             a = self.local_ppo.choose_action(s)
 
             s_, r, done, _ = self.env.step(a)
-            print(s, a, s_, done, '\n')
             buffer_s.append(s)
             buffer_a.append(a)
             buffer_r.append((r + 8) / 8)
@@ -209,7 +205,7 @@ def main():
     define the way of data interaction among workers and parametersever
     """
     print("Running Asynchronous Parameter Server Training.")
-    test_ppo = PPO()
+
     ray.init()
     ps = ParameterServer.remote()
     workers = [DataWorker.remote() for _ in range(N_WORKERS)]
@@ -219,15 +215,38 @@ def main():
     for worker in workers:
         datas[worker.compute_transitions.remote(current_weights)] = worker
 
+    time0 = time.time()
+    test_count = 0
+    test_ppo = PPO()
+    test_env = gym.make(GAME).unwrapped
+
     for i in range(ITERATIONS * N_WORKERS):
         ready_list, _ = ray.wait(list(datas))
         ready_id = ready_list[0]
         worker = datas.pop(ready_id)
 
         # update PS with worker transitions
-        print('updating')
         current_weights = ps.update_model.remote(ready_id)
         datas[worker.compute_transitions.remote(current_weights)] = worker
+
+        # evalute temporal performance
+        time1 = time.time()
+        if (time1 - time0) > ITERVAL:
+            test_count += 1
+            ep_r = 0
+            weights = ray.get(current_weights)
+            test_ppo.set_weights(weights)
+
+            for i in range(N_TEST):
+                s = test_env.reset()
+                for _ in range(200):
+                    a = test_ppo.choose_action(s)
+                    s_, r, done, _ = test_env.step(a)
+                    ep_r += r
+                    if done:
+                        break
+            print('{} round, {} tests, {} points'.format(test_count, N_TEST, np.round(ep_r, 2)))
+            time0 = time.time()
 
 
 if __name__ == "__main__":
