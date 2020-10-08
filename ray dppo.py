@@ -25,16 +25,19 @@ class PPO(object):
         # build placeholder
         self._build_ph('ph')
 
+        # init weight
+        self.w_init, self.b_init = tf.random_normal_initializer(0, 0.3), tf.constant_initializer(0.1)
+
         # build critic net
         self._build_cnet('critic')
 
         # build actor net
-        pi, pi_params, self.sigma, self.mu, self.l1, self.ts = self._build_anet('pi', trainable=True)
-        oldpi, oldpi_params, _, _, _, _ = self._build_anet('oldpi', trainable=False)
-        self.sample_op = tf.squeeze(pi.sample(1), axis=0)
+        self.pi, pi_params, self.sigma, self.mu, self.l1, self.ts = self._build_anet('pi', trainable=True)
+        self.oldpi, oldpi_params, _, _, _, _ = self._build_anet('oldpi', trainable=False)
+        self.sample_op = tf.squeeze(self.pi.sample(1), axis=0)
 
         # build loss function
-        self._build_loss_function('loss', pi, oldpi)
+        self._build_loss_function('loss')
 
         # update oldpi by pi
         with tf.variable_scope('update_oldpi'):
@@ -53,31 +56,45 @@ class PPO(object):
         with tf.variable_scope(name):
             self.tfs = tf.placeholder(tf.float32, [None, S_DIM], 'state')
             self.tfa = tf.placeholder(tf.float32, [None, A_DIM], 'action')
+            self.tfdc_r = tf.placeholder(tf.float32, [None, 1], 'discounted_r')
             self.tfadv = tf.placeholder(tf.float32, [None, 1], 'advantage')
 
     def _build_anet(self, name, trainable):
         with tf.variable_scope(name):
-            l1 = tf.layers.dense(self.tfs, 200, tf.nn.relu, trainable=trainable)
-            mu = 2 * tf.layers.dense(l1, A_DIM, tf.nn.relu, trainable=trainable)
-            sigma = tf.layers.dense(l1, A_DIM, tf.nn.relu, trainable=trainable)
+            l1 = tf.layers.dense(self.tfs, 200, tf.nn.relu,
+                                 kernel_initializer=self.w_init,
+                                 bias_initializer=self.b_init,
+                                 trainable=trainable)
+            mu = 2 * tf.layers.dense(l1, A_DIM, tf.nn.tanh,
+                                     kernel_initializer=self.w_init,
+                                     bias_initializer=self.b_init,
+                                     trainable=trainable)
+            sigma = tf.layers.dense(l1, A_DIM, tf.nn.softplus,
+                                    kernel_initializer=self.w_init,
+                                    bias_initializer=self.b_init,
+                                    trainable=trainable)
             norm_dist = tf.distributions.Normal(loc=mu, scale=sigma)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
         return norm_dist, params, sigma, mu, l1, self.tfs
 
     def _build_cnet(self, name):
         with tf.variable_scope(name):
-            l1 = tf.layers.dense(self.tfs, 100, tf.nn.relu)
-            self.v = tf.layers.dense(l1, 1)  # state-value
-            self.tfdc_r = tf.placeholder(tf.float32, [None, 1], 'discounted_r')
+            l1 = tf.layers.dense(self.tfs, 100, tf.nn.relu, kernel_initializer=self.w_init,
+                            bias_initializer=self.b_init)
+            self.v = tf.layers.dense(l1, 1, kernel_initializer=self.w_init,
+                            bias_initializer=self.b_init)  # state-value
             self.advantage = self.tfdc_r - self.v
 
-    def _build_loss_function(self, name, pi, oldpi):
+    def _build_loss_function(self, name):
         with tf.variable_scope('name'):
             with tf.variable_scope('atrain'):
-                ratio = pi.prob(self.tfa) / oldpi.prob(self.tfa)
-                surr = ratio * self.tfadv
+                a0 = tf.constant(1e-4)
+                self.ratio = self.pi.prob(self.tfa) / (self.oldpi.prob(self.tfa) + a0)
+                # self.pi = pi.prob(self.tfa)
+                # self.oldpi = oldpi.prob(self.tfa)
+                surr = self.ratio * self.tfadv
                 self.aloss = -tf.reduce_mean(
-                    tf.minimum(surr, tf.clip_by_value(ratio, 1. - METHOD['epsilon'],
+                    tf.minimum(surr, tf.clip_by_value(self.ratio, 1. - METHOD['epsilon'],
                                                       1. + METHOD[
                                                           'epsilon']) * self.tfadv))
                 self.actor_opt = tf.train.AdamOptimizer(A_LR)
@@ -122,7 +139,7 @@ class PPO(object):
             [self.sess.run(self.ctrain_op, {self.tfs: bs, self.tfdc_r: br}) for _ in
              range(C_UPDATE_STEPS)]
             print('update')
-            print(self.sess.run([self.aloss, self.closs], {self.tfs: bs, self.tfa: ba, self.tfadv: adv, self.tfdc_r: br}))
+            print(self.sess.run([self.aloss, self.ratio, self.tfa], {self.tfs: bs, self.tfa: ba, self.tfadv: adv, self.tfdc_r: br}))
 
     def get_weights(self):
         return [self.a_variables.get_weights(), self.c_variables.get_weights()]

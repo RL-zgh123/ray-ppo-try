@@ -53,7 +53,7 @@ class PPO(object):
         self.tfa = tf.placeholder(tf.float32, [None, A_DIM], 'action')
         self.tfadv = tf.placeholder(tf.float32, [None, 1], 'advantage')
         # ratio = tf.exp(pi.log_prob(self.tfa) - oldpi.log_prob(self.tfa))
-        ratio = pi.prob(self.tfa) / (oldpi.prob(self.tfa) + 1e-5)
+        ratio = pi.prob(self.tfa) / (oldpi.prob(self.tfa))
         surr = ratio * self.tfadv  # surrogate loss
 
         self.aloss = -tf.reduce_mean(tf.minimum(  # clipped surrogate objective
