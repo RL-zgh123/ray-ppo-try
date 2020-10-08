@@ -35,12 +35,12 @@ class PPO(object):
         self._build_cnet('critic')
 
         # build actor net
-        pi, pi_params = self._build_anet('pi', trainable=True)
-        oldpi, oldpi_params = self._build_anet('oldpi', trainable=False)
-        self.sample_op = tf.squeeze(pi.sample(1), axis=0)
+        self.pi, pi_params = self._build_anet('pi', trainable=True)
+        self.oldpi, oldpi_params = self._build_anet('oldpi', trainable=False)
+        self.sample_op = tf.squeeze(self.pi.sample(1), axis=0)
 
         # build loss function
-        self._build_loss_function('loss', pi, oldpi)
+        self._build_loss_function('loss')
 
         # update oldpi by pi
         with tf.variable_scope('update_oldpi'):
@@ -88,10 +88,11 @@ class PPO(object):
                             bias_initializer=self.b_init)  # state-value
             self.advantage = self.tfdc_r - self.v
 
-    def _build_loss_function(self, name, pi, oldpi):
+    def _build_loss_function(self, name):
         with tf.variable_scope('name'):
             with tf.variable_scope('atrain'):
-                ratio = pi.prob(self.tfa) / oldpi.prob(self.tfa)
+                a0 = tf.constant(1e-4)
+                ratio = self.pi.prob(self.tfa) / (self.oldpi.prob(self.tfa) + a0)
                 surr = ratio * self.tfadv
                 self.aloss = -tf.reduce_mean(
                     tf.minimum(surr, tf.clip_by_value(ratio, 1. - METHOD['epsilon'],
