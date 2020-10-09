@@ -6,9 +6,9 @@ import ray
 from ray.experimental.tf_utils import TensorFlowVariables
 import time
 
-N_WORKERS = 10
+N_WORKERS = 1
 ITERATIONS = 250000
-ITERVAL = 30
+ITERVAL = 10
 N_TEST = 3
 EP_MAX = 200
 EP_LEN = 200
@@ -91,11 +91,11 @@ class PPO(object):
     def _build_loss_function(self, name):
         with tf.variable_scope('name'):
             with tf.variable_scope('atrain'):
-                a0 = tf.constant(1e-4)
-                ratio = self.pi.prob(self.tfa) / (self.oldpi.prob(self.tfa) + a0)
-                surr = ratio * self.tfadv
+                a0 = tf.constant(1e-10)
+                self.ratio = self.pi.prob(self.tfa) / (self.oldpi.prob(self.tfa) + a0)
+                self.surr = self.ratio * self.tfadv
                 self.aloss = -tf.reduce_mean(
-                    tf.minimum(surr, tf.clip_by_value(ratio, 1. - METHOD['epsilon'],
+                    tf.minimum(self.surr, tf.clip_by_value(self.ratio, 1. - METHOD['epsilon'],
                                                       1. + METHOD[
                                                           'epsilon']) * self.tfadv))
                 self.actor_opt = tf.train.AdamOptimizer(A_LR)
@@ -137,7 +137,7 @@ class PPO(object):
             [self.sess.run(self.ctrain_op, {self.tfs: bs, self.tfdc_r: br}) for _ in
              range(C_UPDATE_STEPS)]
             # print('update')
-            # print(self.sess.run([self.aloss, self.ratio, self.tfa], {self.tfs: bs, self.tfa: ba, self.tfadv: adv, self.tfdc_r: br}))
+            # print(self.sess.run([self.aloss, self.ratio], {self.tfs: bs, self.tfa: ba, self.tfadv: adv, self.tfdc_r: br}))
 
     def get_weights(self):
         return [self.a_variables.get_weights(), self.c_variables.get_weights()]
@@ -148,12 +148,13 @@ class PPO(object):
 
 
 # PS can be deployed to GPU machine
-@ray.remote
+# @ray.remote
 class ParameterServer(object):
     def __init__(self):
         self.global_ppo = PPO()
 
     def update_model(self, transitions):
+        transitions = ray.get(transitions)
         self.global_ppo.update(transitions)
         return self.global_ppo.get_weights()
 
@@ -208,17 +209,21 @@ def main():
     print("Running Asynchronous Parameter Server Training.")
 
     ray.init()
-    ps = ParameterServer.remote()
+    # ps = ParameterServer.remote()
+    ps = ParameterServer()
     workers = [DataWorker.remote() for _ in range(N_WORKERS)]
 
-    current_weights = ps.get_weights.remote()
+    # current_weights = ps.get_weights.remote()
+    current_weights = ps.get_weights()
+    # weights0 = ray.get(current_weights)
     datas = {}
     for worker in workers:
         datas[worker.compute_transitions.remote(current_weights)] = worker
 
     time0 = time.time()
     test_count = 0
-    test_ppo = PPO()
+    with tf.Graph().as_default():
+        test_ppo = PPO()
     test_env = gym.make(GAME).unwrapped
 
     for i in range(ITERATIONS * N_WORKERS):
@@ -227,7 +232,8 @@ def main():
         worker = datas.pop(ready_id)
 
         # update PS with worker transitions
-        current_weights = ps.update_model.remote(ready_id)
+        # current_weights = ps.update_model.remote(ready_id)
+        current_weights = ps.update_model(ready_id)
         datas[worker.compute_transitions.remote(current_weights)] = worker
 
         # evalute temporal performance
@@ -235,7 +241,10 @@ def main():
         if (time1 - time0) > ITERVAL:
             test_count += 1
             ep_r = 0
-            weights = ray.get(current_weights)
+            # weights = ray.get(current_weights)
+            # print('curr0: {} \n old0: {} \n'.format(weights[0], weights0[0]))
+
+            weights = current_weights
             test_ppo.set_weights(weights)
 
             for i in range(N_TEST):
