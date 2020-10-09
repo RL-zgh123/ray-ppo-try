@@ -29,7 +29,9 @@ class PPO(object):
         self._build_ph('ph')
 
         # init weight
-        self.w_init, self.b_init = tf.random_normal_initializer(0, 0.3), tf.constant_initializer(0.1)
+        self.w_init, self.b_init = tf.random_normal_initializer(0,
+                                                                0.3), tf.constant_initializer(
+            0.1)
 
         # build critic net
         self._build_cnet('critic')
@@ -82,22 +84,25 @@ class PPO(object):
 
     def _build_cnet(self, name):
         with tf.variable_scope(name):
-            l1 = tf.layers.dense(self.tfs, 100, tf.nn.relu, kernel_initializer=self.w_init,
-                            bias_initializer=self.b_init)
+            l1 = tf.layers.dense(self.tfs, 100, tf.nn.relu,
+                                 kernel_initializer=self.w_init,
+                                 bias_initializer=self.b_init)
             self.v = tf.layers.dense(l1, 1, kernel_initializer=self.w_init,
-                            bias_initializer=self.b_init)  # state-value
+                                     bias_initializer=self.b_init)  # state-value
             self.advantage = self.tfdc_r - self.v
 
     def _build_loss_function(self, name):
         with tf.variable_scope('name'):
             with tf.variable_scope('atrain'):
                 a0 = tf.constant(1e-10)
-                self.ratio = self.pi.prob(self.tfa) / (self.oldpi.prob(self.tfa) + a0)
+                self.ratio = self.pi.prob(self.tfa) / (
+                            self.oldpi.prob(self.tfa) + a0)
                 self.surr = self.ratio * self.tfadv
                 self.aloss = -tf.reduce_mean(
-                    tf.minimum(self.surr, tf.clip_by_value(self.ratio, 1. - METHOD['epsilon'],
-                                                      1. + METHOD[
-                                                          'epsilon']) * self.tfadv))
+                    tf.minimum(self.surr,
+                               tf.clip_by_value(self.ratio, 1. - METHOD['epsilon'],
+                                                1. + METHOD[
+                                                    'epsilon']) * self.tfadv))
                 self.actor_opt = tf.train.AdamOptimizer(A_LR)
                 self.atrain_op = self.actor_opt.minimize(
                     self.aloss)
@@ -125,6 +130,8 @@ class PPO(object):
 
     def update(self, transitions):
         for transition in transitions:
+            print('trans: {}, len: {}'.format(transitions, len(transitions)))
+            print('tran: {}, len: {}'.format(transition, len(transition)))
             self.sess.run(self.update_oldpi_op)
             bs, ba, br = transition[:, :S_DIM], transition[:,
                                                 S_DIM: S_DIM + A_DIM], transition[:,
