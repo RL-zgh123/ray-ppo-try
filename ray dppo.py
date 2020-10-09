@@ -35,8 +35,8 @@ class PPO(object):
         self._build_cnet('critic')
 
         # build actor net
-        self.pi, pi_params = self._build_anet('pi', trainable=True)
-        self.oldpi, oldpi_params = self._build_anet('oldpi', trainable=False)
+        self.pi, self.pi_params = self._build_anet('pi', trainable=True)
+        self.oldpi, self.oldpi_params = self._build_anet('oldpi', trainable=False)
         self.sample_op = tf.squeeze(self.pi.sample(1), axis=0)
 
         # build loss function
@@ -45,7 +45,7 @@ class PPO(object):
         # update oldpi by pi
         with tf.variable_scope('update_oldpi'):
             self.update_oldpi_op = [oldp.assign(p) for p, oldp in
-                                    zip(pi_params, oldpi_params)]
+                                    zip(self.pi_params, self.oldpi_params)]
 
         # init session
         self.sess = tf.Session()
@@ -172,6 +172,9 @@ class DataWorker(object):
     def compute_transitions(self, weights):
         self.local_ppo.set_weights(weights)
         buffer_s, buffer_a, buffer_r = [], [], []
+
+        ep_r = 0
+
         transitions = []
         s = self.env.reset()
         done = False
@@ -182,7 +185,8 @@ class DataWorker(object):
             buffer_s.append(s)
             buffer_a.append(a)
             buffer_r.append((r + 8) / 8)
-            s = s_ #if not done else self.env.reset()
+            s = s_
+            ep_r += r
 
             if i % BATCH == 0 or i == EP_LEN - 1:
                 # compute discounted reward
@@ -199,6 +203,8 @@ class DataWorker(object):
                 transitions.append(transtion)
 
                 buffer_s, buffer_a, buffer_r = [], [], []
+
+            print(ep_r)
         return transitions
 
 
@@ -237,26 +243,26 @@ def main():
         datas[worker.compute_transitions.remote(current_weights)] = worker
 
         # evalute temporal performance
-        time1 = time.time()
-        if (time1 - time0) > ITERVAL:
-            test_count += 1
-            ep_r = 0
-            # weights = ray.get(current_weights)
-            # print('curr0: {} \n old0: {} \n'.format(weights[0], weights0[0]))
-
-            weights = current_weights
-            test_ppo.set_weights(weights)
-
-            for i in range(N_TEST):
-                s = test_env.reset()
-                for _ in range(200):
-                    a = test_ppo.choose_action(s)
-                    s_, r, done, _ = test_env.step(a)
-                    ep_r += r
-                    if done:
-                        break
-            print('{} round, {} tests, {} points'.format(test_count, N_TEST, np.round(ep_r, 2)))
-            time0 = time.time()
+        # time1 = time.time()
+        # if (time1 - time0) > ITERVAL:
+        #     test_count += 1
+        #     ep_r = 0
+        #     # weights = ray.get(current_weights)
+        #     # print('curr0: {} \n old0: {} \n'.format(weights[0], weights0[0]))
+        #
+        #     weights = current_weights
+        #     test_ppo.set_weights(weights)
+        #
+        #     for i in range(N_TEST):
+        #         s = test_env.reset()
+        #         for _ in range(200):
+        #             a = test_ppo.choose_action(s)
+        #             s_, r, done, _ = test_env.step(a)
+        #             ep_r += r
+        #             if done:
+        #                 break
+        #     print('{} round, {} tests, {} points'.format(test_count, N_TEST, np.round(ep_r, 2)))
+        #     time0 = time.time()
 
 
 if __name__ == "__main__":
