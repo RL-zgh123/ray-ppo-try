@@ -16,8 +16,8 @@ GAMMA = 0.9
 A_LR = 0.0001
 C_LR = 0.001
 BATCH = 64
-A_UPDATE_STEPS = 10
-C_UPDATE_STEPS = 10
+A_UPDATE_STEPS = 5
+C_UPDATE_STEPS = 5
 GAME = 'Pendulum-v0'
 S_DIM, A_DIM = 3, 1
 METHOD = dict(name='clip', epsilon=0.2)
@@ -29,16 +29,14 @@ class PPO(object):
         self._build_ph('ph')
 
         # init weight
-        self.w_init, self.b_init = tf.random_normal_initializer(0,
-                                                                0.3), tf.constant_initializer(
-            0.1)
-
+        self.w_init, self.b_init = tf.random_normal_initializer(0, 0.3), \
+                                   tf.constant_initializer(0.1)
         # build critic net
         self._build_cnet('critic')
 
         # build actor net
-        self.pi, self.pi_params = self._build_anet('pi', trainable=True)
-        self.oldpi, self.oldpi_params = self._build_anet('oldpi', trainable=False)
+        self.pi, self.pi_params, self.sigma = self._build_anet('pi', trainable=True)
+        self.oldpi, self.oldpi_params, _ = self._build_anet('oldpi', trainable=False)
         self.sample_op = tf.squeeze(self.pi.sample(1), axis=0)
 
         # build loss function
@@ -80,7 +78,7 @@ class PPO(object):
                                     trainable=trainable)
             norm_dist = tf.distributions.Normal(loc=mu, scale=sigma)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
-        return norm_dist, params
+        return norm_dist, params, sigma
 
     def _build_cnet(self, name):
         with tf.variable_scope(name):
@@ -93,24 +91,24 @@ class PPO(object):
 
     def _build_loss_function(self, name):
         with tf.variable_scope('name'):
-            with tf.variable_scope('atrain'):
-                a0 = tf.constant(1e-10)
-                self.ratio = self.pi.prob(self.tfa) / (
-                            self.oldpi.prob(self.tfa) + a0)
-                self.surr = self.ratio * self.tfadv
-                self.aloss = -tf.reduce_mean(
-                    tf.minimum(self.surr,
-                               tf.clip_by_value(self.ratio, 1. - METHOD['epsilon'],
-                                                1. + METHOD[
-                                                    'epsilon']) * self.tfadv))
-                self.actor_opt = tf.train.AdamOptimizer(A_LR)
-                self.atrain_op = self.actor_opt.minimize(
-                    self.aloss)
+            # with tf.variable_scope('atrain'):
+            a0 = tf.constant(1e-10)
+            self.ratio = self.pi.prob(self.tfa) / (
+                self.oldpi.prob(self.tfa))
+            self.surr = self.ratio * self.tfadv
+            self.aloss = -tf.reduce_mean(
+                tf.minimum(self.surr,
+                           tf.clip_by_value(self.ratio, 1. - METHOD['epsilon'],
+                                            1. + METHOD[
+                                                'epsilon']) * self.tfadv))
+            self.actor_opt = tf.train.AdamOptimizer(A_LR)
+            self.atrain_op = self.actor_opt.minimize(
+                self.aloss)
 
-            with tf.variable_scope('ctrain'):
-                self.closs = tf.reduce_mean(tf.square(self.advantage))
-                self.critic_opt = tf.train.AdamOptimizer(C_LR)
-                self.ctrain_op = self.critic_opt.minimize(self.closs)
+            # with tf.variable_scope('ctrain'):
+            self.closs = tf.reduce_mean(tf.square(self.advantage))
+            self.critic_opt = tf.train.AdamOptimizer(C_LR)
+            self.ctrain_op = self.critic_opt.minimize(self.closs)
 
     def _build_variables(self):
         # ray专用的权重提取api
@@ -121,7 +119,7 @@ class PPO(object):
 
     def choose_action(self, s):
         s = s[np.newaxis, :]
-        a = self.sess.run(self.sample_op, {self.tfs: s})
+        a, sigma = self.sess.run([self.sample_op, self.sigma], {self.tfs: s})
         return np.clip(a[0], -2, 2)
 
     def get_v(self, s):
@@ -146,7 +144,9 @@ class PPO(object):
              range(C_UPDATE_STEPS)]
             # print('update')
             # print(self.sess.run([self.aloss, self.ratio], {self.tfs: bs, self.tfa: ba, self.tfadv: adv, self.tfdc_r: br}))
-            return self.sess.run(self.aloss, {self.tfs: bs, self.tfa: ba, self.tfadv: adv, self.tfdc_r: br})
+            return self.sess.run([self.aloss, self.closs],
+                                 {self.tfs: bs, self.tfa: ba, self.tfadv: adv,
+                                  self.tfdc_r: br})
 
     def get_weights(self):
         return [self.a_variables.get_weights(), self.c_variables.get_weights()]
@@ -164,8 +164,8 @@ class ParameterServer(object):
 
     def update_model(self, transitions):
         transitions = ray.get(transitions)
-        aloss = self.global_ppo.update(transitions)
-        return [self.global_ppo.get_weights(), aloss]
+        aloss, closs = self.global_ppo.update(transitions)
+        return [self.global_ppo.get_weights(), aloss, closs]
 
     def get_weights(self):
         return self.global_ppo.get_weights()
@@ -186,14 +186,13 @@ class DataWorker(object):
 
         transitions = []
         s = self.env.reset()
-        done = False
         for i in range(EP_LEN):
             a = self.local_ppo.choose_action(s)
 
             s_, r, done, _ = self.env.step(a)
             buffer_s.append(s)
             buffer_a.append(a)
-            buffer_r.append((r + 8) / 8)
+            buffer_r.append(r)
             s = s_
             ep_r += r
 
@@ -213,7 +212,7 @@ class DataWorker(object):
 
                 buffer_s, buffer_a, buffer_r = [], [], []
 
-            # print(ep_r)
+        print(ep_r)
         return transitions
 
 
@@ -248,42 +247,47 @@ def main():
 
         # update PS with worker transitions
         # current_weights = ps.update_model.remote(ready_id)
-        current_weights, aloss = ps.update_model(ready_id)
+        current_weights, aloss, closs = ps.update_model(ready_id)
         datas[worker.compute_transitions.remote(current_weights)] = worker
 
+        print('aloss: {}, closs: {}'.format(aloss, closs))
+
         # evalute temporal performance
-        time1 = time.time()
-        if (time1 - time0) > ITERVAL:
-            print('\n aloss:{}'.format(aloss))
-            test_count += 1
-            ep_r = 0
-            # weights = ray.get(current_weights)
-            # print('curr0: {} \n old0: {} \n'.format(weights[0], weights0[0]))
-
-            weights = current_weights
-            test_ppo.set_weights(weights)
-
-            for i in range(N_TEST):
-                s = test_env.reset()
-                for _ in range(200):
-                    a = test_ppo.choose_action(s)
-                    s_, r, done, _ = test_env.step(a)
-                    ep_r += r
-                    if done:
-                        break
-            print('{} round, {} tests, {} points'.format(test_count, N_TEST, np.round(ep_r / N_TEST, 2)))
-
-            ep_r = 0
-            for i in range(N_TEST):
-                s = test_env.reset()
-                for _ in range(200):
-                    a = ps.global_ppo.choose_action(s)
-                    s_, r, done, _ = test_env.step(a)
-                    ep_r += r
-                    if done:
-                        break
-            print('ps, {} round, {} tests, {} points'.format(test_count, N_TEST, np.round(ep_r / N_TEST, 2)))
-            time0 = time.time()
+        # time1 = time.time()
+        # if (time1 - time0) > ITERVAL:
+        #     # print('\n aloss:{}'.format(aloss))
+        #     test_count += 1
+        #     ep_r = 0
+        #     # weights = ray.get(current_weights)
+        #     # print('curr0: {} \n old0: {} \n'.format(weights[0], weights0[0]))
+        #
+        #     weights = current_weights
+        #     test_ppo.set_weights(weights)
+        #
+        #     for i in range(N_TEST):
+        #         s = test_env.reset()
+        #         for _ in range(200):
+        #             a = test_ppo.choose_action(s)
+        #             s_, r, done, _ = test_env.step(a)
+        #             ep_r += r
+        #             if done:
+        #                 break
+        #     print('{} round, {} tests, {} points'.format(test_count, N_TEST,
+        #                                                  np.round(ep_r / N_TEST, 2)))
+        #
+        #     ep_r = 0
+        #     for i in range(N_TEST):
+        #         s = test_env.reset()
+        #         for _ in range(200):
+        #             a = ps.global_ppo.choose_action(s)
+        #             s_, r, done, _ = test_env.step(a)
+        #             ep_r += r
+        #             if done:
+        #                 break
+        #     print('ps, {} round, {} tests, {} points'.format(test_count, N_TEST,
+        #                                                      np.round(ep_r / N_TEST,
+        #                                                               2)))
+        #     time0 = time.time()
 
 
 if __name__ == "__main__":

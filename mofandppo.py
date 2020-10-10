@@ -22,7 +22,7 @@ N_WORKER = 4  # parallel workers
 GAMMA = 0.9  # reward discount factor
 A_LR = 0.0001  # learning rate for actor
 C_LR = 0.0002  # learning rate for critic
-MIN_BATCH_SIZE = 32  # minimum batch size for updating PPO
+MIN_BATCH_SIZE = 64  # minimum batch size for updating PPO
 UPDATE_STEP = 10  # loop update operation n-steps
 EPSILON = 0.2  # for clipping surrogate objective
 GAME = 'Pendulum-v0'
@@ -43,8 +43,8 @@ class PPO(object):
         self.ctrain_op = tf.train.AdamOptimizer(C_LR).minimize(self.closs)
 
         # actor
-        pi, pi_params = self._build_anet('pi', trainable=True)
-        oldpi, oldpi_params = self._build_anet('oldpi', trainable=False)
+        pi, pi_params, self.sigma = self._build_anet('pi', trainable=True)
+        oldpi, oldpi_params, _ = self._build_anet('oldpi', trainable=False)
         self.sample_op = tf.squeeze(pi.sample(1),
                                     axis=0)  # operation of choosing action
         self.update_oldpi_op = [oldp.assign(p) for p, oldp in
@@ -94,11 +94,12 @@ class PPO(object):
             sigma = tf.layers.dense(l1, A_DIM, tf.nn.softplus, trainable=trainable)
             norm_dist = tf.distributions.Normal(loc=mu, scale=sigma)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
-        return norm_dist, params
+        return norm_dist, params, sigma
 
     def choose_action(self, s):
         s = s[np.newaxis, :]
-        a = self.sess.run(self.sample_op, {self.tfs: s})
+        a, sigma = self.sess.run([self.sample_op, self.sigma], {self.tfs: s})
+        print('sigma: ', sigma)
         return np.clip(a[0], -2, 2)
 
     def get_v(self, s):
