@@ -11,9 +11,9 @@ ITERATIONS = 250000
 N_TEST = 10
 EP_MAX = 200
 EP_LEN = 200
-GAMMA = 0.99
-A_LR = 1e-4
-C_LR = 1e-3
+GAMMA = 0.9
+A_LR = 5e-5
+C_LR = 5e-4
 BATCH = 64
 A_UPDATE_STEPS = 10
 C_UPDATE_STEPS = 10
@@ -130,9 +130,6 @@ class PPO(object):
 
     def update(self, transitions):
         for i, transition in enumerate(transitions):
-            # print('len: ', i, len(transitions), len(transition), len(transition[0]))
-            # print('transitions:', transitions)
-            # print('tran: ', transition)
             if len(transition) > 10:
                 self.sess.run(self.update_oldpi_op)
                 bs, ba, br = transition[:, :S_DIM], transition[:,
@@ -145,8 +142,6 @@ class PPO(object):
                  range(A_UPDATE_STEPS)]
                 [self.sess.run(self.ctrain_op, {self.tfs: bs, self.tfdc_r: br}) for _ in
                  range(C_UPDATE_STEPS)]
-            # print('update')
-            # print(self.sess.run([self.aloss, self.ratio], {self.tfs: bs, self.tfa: ba, self.tfadv: adv, self.tfdc_r: br}))
         return self.sess.run([self.aloss, self.closs],
                                  {self.tfs: bs, self.tfa: ba, self.tfadv: adv,
                                   self.tfdc_r: br})
@@ -160,15 +155,15 @@ class PPO(object):
 
 
 # PS can be deployed to GPU machine
-# @ray.remote
+@ray.remote
 class ParameterServer(object):
     def __init__(self):
         self.global_ppo = PPO()
 
     def update_model(self, transitions):
-        transitions = ray.get(transitions)
+        # transitions = ray.get(transitions)
         aloss, closs = self.global_ppo.update(transitions)
-        return [self.global_ppo.get_weights(), aloss, closs]
+        return self.global_ppo.get_weights()
 
     def get_weights(self):
         return self.global_ppo.get_weights()
@@ -187,11 +182,10 @@ class DataWorker(object):
     def compute_transitions(self, weights):
         self.local_ppo.set_weights(weights)
         buffer_s, buffer_a, buffer_r = [], [], []
-
         ep_r = 0
-
         transitions = []
         s = self.env.reset()
+
         for i in range(EP_LEN):
             a = self.local_ppo.choose_action(s)
             s_, r, done, _ = self.env.step(a)
@@ -227,12 +221,12 @@ def main():
     print("Running Asynchronous Parameter Server Training.")
 
     ray.init()
-    # ps = ParameterServer.remote()
-    ps = ParameterServer()
+    ps = ParameterServer.remote()
+    # ps = ParameterServer()
     workers = [DataWorker.remote() for _ in range(N_WORKERS)]
 
-    # current_weights = ps.get_weights.remote()
-    current_weights = ps.get_weights()
+    current_weights = ps.get_weights.remote()
+    # current_weights = ps.get_weights()
     # weights0 = ray.get(current_weights)
     datas = {}
     for worker in workers:
@@ -250,19 +244,18 @@ def main():
         worker = datas.pop(ready_id)
 
         # update PS with worker transitions
-        # current_weights = ps.update_model.remote(ready_id)
-        current_weights, aloss, closs = ps.update_model(ready_id)
+        current_weights = ps.update_model.remote(ready_id)
+        # current_weights = ps.update_model(ready_id)
         datas[worker.compute_transitions.remote(current_weights)] = worker
 
-        # print('aloss: {}, closs: {}'.format(aloss, closs))
-
         # evalute temporal performance
-        if i % 250 == 0:
-            # print('\n aloss:{}'.format(aloss))
+        if i % (250 * N_WORKERS) == 0:
             test_count += 1
             ep_r = 0
 
-            test_ppo.set_weights(current_weights)
+            # test_ppo.set_weights(current_weights)
+            weights = ray.get(current_weights)
+            test_ppo.set_weights(weights)
 
             for i in range(N_TEST):
                 s = test_env.reset()
@@ -274,18 +267,6 @@ def main():
                     s = s_
             print('{} round, {} tests, {} points'.format(test_count, N_TEST,
                                                          np.round(ep_r / N_TEST, 2)))
-            #
-            # ep_r = 0
-            # for i in range(N_TEST):
-            #     s = test_env.reset()
-            #     for _ in range(200):
-            #         a = ps.get_action(s)
-            #         s_, r, done, _ = test_env.step(a)
-            #         ep_r += r
-            #         s = s_
-            # print('ps, {} round, {} tests, {} points'.format(test_count, N_TEST,
-            #                                                  np.round(ep_r / N_TEST,
-            #                                                           2)))
 
 
 if __name__ == "__main__":
