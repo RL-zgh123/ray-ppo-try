@@ -8,7 +8,6 @@ import time
 
 N_WORKERS = 1
 ITERATIONS = 250000
-ITERVAL = 20
 N_TEST = 10
 EP_MAX = 200
 EP_LEN = 200
@@ -65,16 +64,16 @@ class PPO(object):
     def _build_anet(self, name, trainable):
         with tf.variable_scope(name):
             l1 = tf.layers.dense(self.tfs, 200, tf.nn.relu,
-                                 # kernel_initializer=self.w_init,
-                                 # bias_initializer=self.b_init,
+                                 kernel_initializer=self.w_init,
+                                 bias_initializer=self.b_init,
                                  trainable=trainable)
             mu = 2 * tf.layers.dense(l1, A_DIM, tf.nn.tanh,
-                                     # kernel_initializer=self.w_init,
-                                     # bias_initializer=self.b_init,
+                                     kernel_initializer=self.w_init,
+                                     bias_initializer=self.b_init,
                                      trainable=trainable)
             sigma = tf.layers.dense(l1, A_DIM, tf.nn.softplus,
-                                    # kernel_initializer=self.w_init,
-                                    # bias_initializer=self.b_init,
+                                    kernel_initializer=self.w_init,
+                                    bias_initializer=self.b_init,
                                     trainable=trainable)
             norm_dist = tf.distributions.Normal(loc=mu, scale=sigma)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
@@ -83,35 +82,35 @@ class PPO(object):
     def _build_cnet(self, name):
         with tf.variable_scope(name):
             l1 = tf.layers.dense(self.tfs, 100, tf.nn.relu,
-                                 # kernel_initializer=self.w_init,
-                                 # bias_initializer=self.b_init
+                                 kernel_initializer=self.w_init,
+                                 bias_initializer=self.b_init
                                  )
             self.v = tf.layers.dense(l1, 1,
-                                     # kernel_initializer=self.w_init,
-                                     # bias_initializer=self.b_init
+                                     kernel_initializer=self.w_init,
+                                     bias_initializer=self.b_init
                                      )  # state-value
             self.advantage = self.tfdc_r - self.v
 
     def _build_loss_function(self, name):
         with tf.variable_scope('name'):
-            # with tf.variable_scope('atrain'):
-            a0 = tf.constant(1e-10)
-            self.ratio = self.pi.prob(self.tfa) / (
-                self.oldpi.prob(self.tfa) + a0)
-            self.surr = self.ratio * self.tfadv
-            self.aloss = -tf.reduce_mean(
-                tf.minimum(self.surr,
-                           tf.clip_by_value(self.ratio, 1. - METHOD['epsilon'],
-                                            1. + METHOD[
-                                                'epsilon']) * self.tfadv))
-            self.actor_opt = tf.train.AdamOptimizer(A_LR)
-            self.atrain_op = self.actor_opt.minimize(
-                self.aloss)
+            with tf.variable_scope('atrain'):
+                a0 = tf.constant(1e-10)
+                self.ratio = self.pi.prob(self.tfa) / (
+                    self.oldpi.prob(self.tfa) + a0)
+                self.surr = self.ratio * self.tfadv
+                self.aloss = -tf.reduce_mean(
+                    tf.minimum(self.surr,
+                               tf.clip_by_value(self.ratio, 1. - METHOD['epsilon'],
+                                                1. + METHOD[
+                                                    'epsilon']) * self.tfadv))
+                self.actor_opt = tf.train.AdamOptimizer(A_LR)
+                self.atrain_op = self.actor_opt.minimize(
+                    self.aloss)
 
-            # with tf.variable_scope('ctrain'):
-            self.closs = tf.reduce_mean(tf.square(self.advantage))
-            self.critic_opt = tf.train.AdamOptimizer(C_LR)
-            self.ctrain_op = self.critic_opt.minimize(self.closs)
+            with tf.variable_scope('ctrain'):
+                self.closs = tf.reduce_mean(tf.square(self.advantage))
+                self.critic_opt = tf.train.AdamOptimizer(C_LR)
+                self.ctrain_op = self.critic_opt.minimize(self.closs)
 
     def _build_variables(self):
         # ray专用的权重提取api
@@ -195,7 +194,6 @@ class DataWorker(object):
         s = self.env.reset()
         for i in range(EP_LEN):
             a = self.local_ppo.choose_action(s)
-
             s_, r, done, _ = self.env.step(a)
             buffer_s.append(s)
             buffer_a.append(a)
@@ -219,9 +217,8 @@ class DataWorker(object):
 
                 buffer_s, buffer_a, buffer_r = [], [], []
 
-        print(ep_r)
+        # print(ep_r)
         return transitions
-
 
 def main():
     """
@@ -269,23 +266,26 @@ def main():
 
             for i in range(N_TEST):
                 s = test_env.reset()
+                r0 = ep_r
                 for _ in range(200):
                     a = test_ppo.choose_action(s)
                     s_, r, done, _ = test_env.step(a)
                     ep_r += r
+                    s = s_
             print('{} round, {} tests, {} points'.format(test_count, N_TEST,
                                                          np.round(ep_r / N_TEST, 2)))
-
-            ep_r = 0
-            for i in range(N_TEST):
-                s = test_env.reset()
-                for _ in range(200):
-                    a = ps.get_action(s)
-                    s_, r, done, _ = test_env.step(a)
-                    ep_r += r
-            print('ps, {} round, {} tests, {} points'.format(test_count, N_TEST,
-                                                             np.round(ep_r / N_TEST,
-                                                                      2)))
+            #
+            # ep_r = 0
+            # for i in range(N_TEST):
+            #     s = test_env.reset()
+            #     for _ in range(200):
+            #         a = ps.get_action(s)
+            #         s_, r, done, _ = test_env.step(a)
+            #         ep_r += r
+            #         s = s_
+            # print('ps, {} round, {} tests, {} points'.format(test_count, N_TEST,
+            #                                                  np.round(ep_r / N_TEST,
+            #                                                           2)))
 
 
 if __name__ == "__main__":
