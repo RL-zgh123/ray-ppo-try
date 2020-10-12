@@ -9,15 +9,15 @@ import time
 N_WORKERS = 1
 ITERATIONS = 250000
 ITERVAL = 20
-N_TEST = 50
+N_TEST = 10
 EP_MAX = 200
 EP_LEN = 200
-GAMMA = 0.9
-A_LR = 0.0001
-C_LR = 0.001
+GAMMA = 0.99
+A_LR = 1e-4
+C_LR = 1e-3
 BATCH = 64
-A_UPDATE_STEPS = 5
-C_UPDATE_STEPS = 5
+A_UPDATE_STEPS = 10
+C_UPDATE_STEPS = 10
 GAME = 'Pendulum-v0'
 S_DIM, A_DIM = 3, 1
 METHOD = dict(name='clip', epsilon=0.2)
@@ -65,16 +65,16 @@ class PPO(object):
     def _build_anet(self, name, trainable):
         with tf.variable_scope(name):
             l1 = tf.layers.dense(self.tfs, 200, tf.nn.relu,
-                                 kernel_initializer=self.w_init,
-                                 bias_initializer=self.b_init,
+                                 # kernel_initializer=self.w_init,
+                                 # bias_initializer=self.b_init,
                                  trainable=trainable)
             mu = 2 * tf.layers.dense(l1, A_DIM, tf.nn.tanh,
-                                     kernel_initializer=self.w_init,
-                                     bias_initializer=self.b_init,
+                                     # kernel_initializer=self.w_init,
+                                     # bias_initializer=self.b_init,
                                      trainable=trainable)
             sigma = tf.layers.dense(l1, A_DIM, tf.nn.softplus,
-                                    kernel_initializer=self.w_init,
-                                    bias_initializer=self.b_init,
+                                    # kernel_initializer=self.w_init,
+                                    # bias_initializer=self.b_init,
                                     trainable=trainable)
             norm_dist = tf.distributions.Normal(loc=mu, scale=sigma)
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name)
@@ -83,10 +83,13 @@ class PPO(object):
     def _build_cnet(self, name):
         with tf.variable_scope(name):
             l1 = tf.layers.dense(self.tfs, 100, tf.nn.relu,
-                                 kernel_initializer=self.w_init,
-                                 bias_initializer=self.b_init)
-            self.v = tf.layers.dense(l1, 1, kernel_initializer=self.w_init,
-                                     bias_initializer=self.b_init)  # state-value
+                                 # kernel_initializer=self.w_init,
+                                 # bias_initializer=self.b_init
+                                 )
+            self.v = tf.layers.dense(l1, 1,
+                                     # kernel_initializer=self.w_init,
+                                     # bias_initializer=self.b_init
+                                     )  # state-value
             self.advantage = self.tfdc_r - self.v
 
     def _build_loss_function(self, name):
@@ -94,7 +97,7 @@ class PPO(object):
             # with tf.variable_scope('atrain'):
             a0 = tf.constant(1e-10)
             self.ratio = self.pi.prob(self.tfa) / (
-                self.oldpi.prob(self.tfa))
+                self.oldpi.prob(self.tfa) + a0)
             self.surr = self.ratio * self.tfadv
             self.aloss = -tf.reduce_mean(
                 tf.minimum(self.surr,
@@ -127,24 +130,25 @@ class PPO(object):
         return self.sess.run(self.v, {self.tfs: s})[0, 0]
 
     def update(self, transitions):
-        for transition in transitions:
-            # print('len: ', len(transitions), len(transition))
+        for i, transition in enumerate(transitions):
+            # print('len: ', i, len(transitions), len(transition), len(transition[0]))
             # print('transitions:', transitions)
             # print('tran: ', transition)
-            self.sess.run(self.update_oldpi_op)
-            bs, ba, br = transition[:, :S_DIM], transition[:,
-                                                S_DIM: S_DIM + A_DIM], transition[:,
-                                                                       -1:]
-            adv = self.sess.run(self.advantage, {self.tfs: bs, self.tfdc_r: br})
-            # udpate actor and critic in a loop
-            [self.sess.run(self.atrain_op,
-                           {self.tfs: bs, self.tfa: ba, self.tfadv: adv}) for _ in
-             range(A_UPDATE_STEPS)]
-            [self.sess.run(self.ctrain_op, {self.tfs: bs, self.tfdc_r: br}) for _ in
-             range(C_UPDATE_STEPS)]
+            if len(transition) > 10:
+                self.sess.run(self.update_oldpi_op)
+                bs, ba, br = transition[:, :S_DIM], transition[:,
+                                                    S_DIM: S_DIM + A_DIM], transition[:,
+                                                                           -1:]
+                adv = self.sess.run(self.advantage, {self.tfs: bs, self.tfdc_r: br})
+                # udpate actor and critic in a loop
+                [self.sess.run(self.atrain_op,
+                               {self.tfs: bs, self.tfa: ba, self.tfadv: adv}) for _ in
+                 range(A_UPDATE_STEPS)]
+                [self.sess.run(self.ctrain_op, {self.tfs: bs, self.tfdc_r: br}) for _ in
+                 range(C_UPDATE_STEPS)]
             # print('update')
             # print(self.sess.run([self.aloss, self.ratio], {self.tfs: bs, self.tfa: ba, self.tfadv: adv, self.tfdc_r: br}))
-            return self.sess.run([self.aloss, self.closs],
+        return self.sess.run([self.aloss, self.closs],
                                  {self.tfs: bs, self.tfa: ba, self.tfadv: adv,
                                   self.tfdc_r: br})
 
@@ -170,6 +174,9 @@ class ParameterServer(object):
     def get_weights(self):
         return self.global_ppo.get_weights()
 
+    def get_action(self, state):
+        return self.global_ppo.choose_action(state)
+
 
 @ray.remote
 class DataWorker(object):
@@ -192,7 +199,7 @@ class DataWorker(object):
             s_, r, done, _ = self.env.step(a)
             buffer_s.append(s)
             buffer_a.append(a)
-            buffer_r.append(r)
+            buffer_r.append((r + 8)/8)
             s = s_
             ep_r += r
 
@@ -250,44 +257,35 @@ def main():
         current_weights, aloss, closs = ps.update_model(ready_id)
         datas[worker.compute_transitions.remote(current_weights)] = worker
 
-        print('aloss: {}, closs: {}'.format(aloss, closs))
+        # print('aloss: {}, closs: {}'.format(aloss, closs))
 
         # evalute temporal performance
-        # time1 = time.time()
-        # if (time1 - time0) > ITERVAL:
-        #     # print('\n aloss:{}'.format(aloss))
-        #     test_count += 1
-        #     ep_r = 0
-        #     # weights = ray.get(current_weights)
-        #     # print('curr0: {} \n old0: {} \n'.format(weights[0], weights0[0]))
-        #
-        #     weights = current_weights
-        #     test_ppo.set_weights(weights)
-        #
-        #     for i in range(N_TEST):
-        #         s = test_env.reset()
-        #         for _ in range(200):
-        #             a = test_ppo.choose_action(s)
-        #             s_, r, done, _ = test_env.step(a)
-        #             ep_r += r
-        #             if done:
-        #                 break
-        #     print('{} round, {} tests, {} points'.format(test_count, N_TEST,
-        #                                                  np.round(ep_r / N_TEST, 2)))
-        #
-        #     ep_r = 0
-        #     for i in range(N_TEST):
-        #         s = test_env.reset()
-        #         for _ in range(200):
-        #             a = ps.global_ppo.choose_action(s)
-        #             s_, r, done, _ = test_env.step(a)
-        #             ep_r += r
-        #             if done:
-        #                 break
-        #     print('ps, {} round, {} tests, {} points'.format(test_count, N_TEST,
-        #                                                      np.round(ep_r / N_TEST,
-        #                                                               2)))
-        #     time0 = time.time()
+        if i % 250 == 0:
+            # print('\n aloss:{}'.format(aloss))
+            test_count += 1
+            ep_r = 0
+
+            test_ppo.set_weights(current_weights)
+
+            for i in range(N_TEST):
+                s = test_env.reset()
+                for _ in range(200):
+                    a = test_ppo.choose_action(s)
+                    s_, r, done, _ = test_env.step(a)
+                    ep_r += r
+            print('{} round, {} tests, {} points'.format(test_count, N_TEST,
+                                                         np.round(ep_r / N_TEST, 2)))
+
+            ep_r = 0
+            for i in range(N_TEST):
+                s = test_env.reset()
+                for _ in range(200):
+                    a = ps.get_action(s)
+                    s_, r, done, _ = test_env.step(a)
+                    ep_r += r
+            print('ps, {} round, {} tests, {} points'.format(test_count, N_TEST,
+                                                             np.round(ep_r / N_TEST,
+                                                                      2)))
 
 
 if __name__ == "__main__":

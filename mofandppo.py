@@ -73,7 +73,7 @@ class PPO(object):
                         range(QUEUE.qsize())]  # collect data from all workers
                 # print('data0', data)
                 data = np.vstack(data)
-                # print('data1', data)
+                print('data1', len(data), data)
                 s, a, r = data[:, :S_DIM], data[:, S_DIM: S_DIM + A_DIM], data[:,
                                                                           -1:]
                 adv = self.sess.run(self.advantage, {self.tfs: s, self.tfdc_r: r})
@@ -83,6 +83,8 @@ class PPO(object):
                  range(UPDATE_STEP)]
                 [self.sess.run(self.ctrain_op, {self.tfs: s, self.tfdc_r: r}) for _
                  in range(UPDATE_STEP)]
+                aloss, closs = self.sess.run([self.aloss, self.closs], {self.tfs: s, self.tfa: a, self.tfadv: adv, self.tfdc_r: r})
+                print(aloss, closs)
                 UPDATE_EVENT.clear()  # updating finished
                 GLOBAL_UPDATE_COUNTER = 0  # reset counter
                 ROLLING_EVENT.set()  # set roll-out available
@@ -99,7 +101,7 @@ class PPO(object):
     def choose_action(self, s):
         s = s[np.newaxis, :]
         a, sigma = self.sess.run([self.sample_op, self.sigma], {self.tfs: s})
-        print('sigma: ', sigma)
+        # print('sigma: ', sigma)
         return np.clip(a[0], -2, 2)
 
     def get_v(self, s):
