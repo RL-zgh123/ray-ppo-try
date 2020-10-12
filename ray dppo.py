@@ -222,18 +222,13 @@ def main():
 
     ray.init()
     ps = ParameterServer.remote()
-    # ps = ParameterServer()
     workers = [DataWorker.remote() for _ in range(N_WORKERS)]
 
     current_weights = ps.get_weights.remote()
-    # current_weights = ps.get_weights()
-    # weights0 = ray.get(current_weights)
     datas = {}
     for worker in workers:
         datas[worker.compute_transitions.remote(current_weights)] = worker
 
-    time0 = time.time()
-    test_count = 0
     with tf.Graph().as_default():
         test_ppo = PPO()
     test_env = gym.make(GAME).unwrapped
@@ -245,15 +240,12 @@ def main():
 
         # update PS with worker transitions
         current_weights = ps.update_model.remote(ready_id)
-        # current_weights = ps.update_model(ready_id)
         datas[worker.compute_transitions.remote(current_weights)] = worker
 
         # evalute temporal performance
         if i % (250 * N_WORKERS) == 0:
             test_count += 1
             ep_r = 0
-
-            # test_ppo.set_weights(current_weights)
             weights = ray.get(current_weights)
             test_ppo.set_weights(weights)
 
