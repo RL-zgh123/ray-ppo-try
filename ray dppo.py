@@ -128,23 +128,34 @@ class PPO(object):
         if s.ndim < 2: s = s[np.newaxis, :]
         return self.sess.run(self.v, {self.tfs: s})[0, 0]
 
-    def update(self, transitions):
+    def update(self, datas):
+        transitions, bs_ = datas[0], datas[1]
         for i, transition in enumerate(transitions):
             if len(transition) > 10:
                 self.sess.run(self.update_oldpi_op)
-                bs, ba, br = transition[:, :S_DIM], transition[:,
-                                                    S_DIM: S_DIM + A_DIM], transition[:,
-                                                                           -1:]
-                adv = self.sess.run(self.advantage, {self.tfs: bs, self.tfdc_r: br})
+
+                br = transition[:, -1:]
+                v_s_ = self.get_v(bs_[i])
+                discount_r = []
+                for r in br[::-1][0]:
+                    v_s_ = r + GAMMA * v_s_
+                    discount_r.append(v_s_)
+                discount_r.reverse()
+
+                br_ = np.array(discount_r)[:, np.newaxis]
+
+
+                bs, ba= transition[:, :S_DIM], transition[:, S_DIM: S_DIM + A_DIM]
+                adv = self.sess.run(self.advantage, {self.tfs: bs, self.tfdc_r: br_})
                 # udpate actor and critic in a loop
                 [self.sess.run(self.atrain_op,
                                {self.tfs: bs, self.tfa: ba, self.tfadv: adv}) for _ in
                  range(A_UPDATE_STEPS)]
-                [self.sess.run(self.ctrain_op, {self.tfs: bs, self.tfdc_r: br}) for _ in
+                [self.sess.run(self.ctrain_op, {self.tfs: bs, self.tfdc_r: br_}) for _ in
                  range(C_UPDATE_STEPS)]
         return self.sess.run([self.aloss, self.closs],
                                  {self.tfs: bs, self.tfa: ba, self.tfadv: adv,
-                                  self.tfdc_r: br})
+                                  self.tfdc_r: br_})
 
     def get_weights(self):
         return [self.a_variables.get_weights(), self.c_variables.get_weights()]
@@ -160,9 +171,9 @@ class ParameterServer(object):
     def __init__(self):
         self.global_ppo = PPO()
 
-    def update_model(self, transitions):
+    def update_model(self, data):
         # transitions = ray.get(transitions)
-        aloss, closs = self.global_ppo.update(transitions)
+        aloss, closs = self.global_ppo.update(data)
         return self.global_ppo.get_weights()
 
     def get_weights(self):
@@ -181,7 +192,7 @@ class DataWorker(object):
     # output data (receive new parameters from PS)
     def compute_transitions(self, weights):
         self.local_ppo.set_weights(weights)
-        buffer_s, buffer_a, buffer_r = [], [], []
+        buffer_s, buffer_a, buffer_r, buffer_s_ = [], [], [], []
         ep_r = 0
         transitions = []
         s = self.env.reset()
@@ -197,22 +208,26 @@ class DataWorker(object):
 
             if i % BATCH == 0 or i == EP_LEN - 1:
                 # compute discounted reward
-                v_s_ = self.local_ppo.get_v(s_)
-                discount_r = []
-                for r in buffer_r[::-1]:
-                    v_s_ = r + GAMMA * v_s_
-                    discount_r.append(v_s_)
-                discount_r.reverse()
+                # v_s_ = self.local_ppo.get_v(s_)
+                # discount_r = []
+                # for r in buffer_r[::-1]:
+                #     v_s_ = r + GAMMA * v_s_
+                #     discount_r.append(v_s_)
+                # discount_r.reverse()
+                #
+                # bs, ba, br = np.vstack(buffer_s), np.vstack(buffer_a), np.array(
+                #     discount_r)[:, np.newaxis]
+                buffer_s_.append(s_)
+                bs, ba, br = np.vstack(buffer_s), np.vstack(buffer_a), np.vstack(buffer_r)
 
-                bs, ba, br = np.vstack(buffer_s), np.vstack(buffer_a), np.array(
-                    discount_r)[:, np.newaxis]
+
                 transtion = np.hstack((bs, ba, br))
                 transitions.append(transtion)
 
                 buffer_s, buffer_a, buffer_r = [], [], []
 
         # print(ep_r)
-        return transitions
+        return transitions, buffer_s_
 
 def main():
     """
@@ -232,6 +247,7 @@ def main():
     with tf.Graph().as_default():
         test_ppo = PPO()
     test_env = gym.make(GAME).unwrapped
+    test_count = 0
 
     for i in range(ITERATIONS * N_WORKERS):
         ready_list, _ = ray.wait(list(datas))
