@@ -6,6 +6,7 @@ import ray
 from ray.experimental.tf_utils import TensorFlowVariables
 import time
 
+
 N_WORKERS = 1
 ITERATIONS = 250000
 N_TEST = 10
