@@ -12,7 +12,7 @@ N_TEST = 10
 EP_MAX = 200
 EP_LEN = 200
 GAMMA = 0.9
-A_LR = 5e-5
+A_LR = 1e-4
 C_LR = 5e-4
 BATCH = 64
 A_UPDATE_STEPS = 10
@@ -133,29 +133,30 @@ class PPO(object):
         for i, transition in enumerate(transitions):
             if len(transition) > 10:
                 self.sess.run(self.update_oldpi_op)
+                # compute discounted reward
+                # br = transition[:, -1:]
+                # # print('br:', br)
+                # v_s_ = self.get_v(bs_[i])
+                # discount_r = []
+                # for r in br[::-1][0]:
+                #     v_s_ = r + GAMMA * v_s_
+                #     discount_r.append(v_s_)
+                # discount_r.reverse()
+                # br_ = np.array(discount_r)[:, np.newaxis]
+                # bs, ba= transition[:, :S_DIM], transition[:, S_DIM: S_DIM + A_DIM]
 
-                br = transition[:, -1:]
-                v_s_ = self.get_v(bs_[i])
-                discount_r = []
-                for r in br[::-1][0]:
-                    v_s_ = r + GAMMA * v_s_
-                    discount_r.append(v_s_)
-                discount_r.reverse()
+                bs, ba, br = transition[:, :S_DIM], transition[:, S_DIM: S_DIM + A_DIM], transition[:, -1:]
 
-                br_ = np.array(discount_r)[:, np.newaxis]
-
-
-                bs, ba= transition[:, :S_DIM], transition[:, S_DIM: S_DIM + A_DIM]
-                adv = self.sess.run(self.advantage, {self.tfs: bs, self.tfdc_r: br_})
+                adv = self.sess.run(self.advantage, {self.tfs: bs, self.tfdc_r: br})
                 # udpate actor and critic in a loop
                 [self.sess.run(self.atrain_op,
                                {self.tfs: bs, self.tfa: ba, self.tfadv: adv}) for _ in
                  range(A_UPDATE_STEPS)]
-                [self.sess.run(self.ctrain_op, {self.tfs: bs, self.tfdc_r: br_}) for _ in
+                [self.sess.run(self.ctrain_op, {self.tfs: bs, self.tfdc_r: br}) for _ in
                  range(C_UPDATE_STEPS)]
         return self.sess.run([self.aloss, self.closs],
                                  {self.tfs: bs, self.tfa: ba, self.tfadv: adv,
-                                  self.tfdc_r: br_})
+                                  self.tfdc_r: br})
 
     def get_weights(self):
         return [self.a_variables.get_weights(), self.c_variables.get_weights()]
@@ -208,17 +209,19 @@ class DataWorker(object):
 
             if i % BATCH == 0 or i == EP_LEN - 1:
                 # compute discounted reward
-                # v_s_ = self.local_ppo.get_v(s_)
-                # discount_r = []
-                # for r in buffer_r[::-1]:
-                #     v_s_ = r + GAMMA * v_s_
-                #     discount_r.append(v_s_)
-                # discount_r.reverse()
-                #
-                # bs, ba, br = np.vstack(buffer_s), np.vstack(buffer_a), np.array(
-                #     discount_r)[:, np.newaxis]
-                buffer_s_.append(s_)
-                bs, ba, br = np.vstack(buffer_s), np.vstack(buffer_a), np.vstack(buffer_r)
+                v_s_ = self.local_ppo.get_v(s_)
+                discount_r = []
+                for r in buffer_r[::-1]:
+                    v_s_ = r + GAMMA * v_s_
+                    discount_r.append(v_s_)
+                discount_r.reverse()
+
+                bs, ba, br = np.vstack(buffer_s), np.vstack(buffer_a), np.array(
+                    discount_r)[:, np.newaxis]
+
+                # for computing dc_r in ps
+                # buffer_s_.append(s_)
+                # bs, ba, br = np.vstack(buffer_s), np.vstack(buffer_a), np.vstack(buffer_r)
 
 
                 transtion = np.hstack((bs, ba, br))
