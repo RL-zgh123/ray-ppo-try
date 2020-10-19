@@ -96,7 +96,7 @@ class PPO(object):
             with tf.variable_scope('atrain'):
                 a0 = tf.constant(1e-10)
                 self.ratio = self.pi.prob(self.tfa) / (
-                    self.oldpi.prob(self.tfa) + a0)
+                        self.oldpi.prob(self.tfa) + a0)
                 self.surr = self.ratio * self.tfadv
                 self.aloss = -tf.reduce_mean(
                     tf.minimum(self.surr,
@@ -145,18 +145,22 @@ class PPO(object):
                 # br_ = np.array(discount_r)[:, np.newaxis]
                 # bs, ba= transition[:, :S_DIM], transition[:, S_DIM: S_DIM + A_DIM]
 
-                bs, ba, br = transition[:, :S_DIM], transition[:, S_DIM: S_DIM + A_DIM], transition[:, -1:]
+                bs, ba, br = transition[:, :S_DIM], transition[:,
+                                                    S_DIM: S_DIM + A_DIM], transition[
+                                                                           :, -1:]
 
                 adv = self.sess.run(self.advantage, {self.tfs: bs, self.tfdc_r: br})
                 # udpate actor and critic in a loop
                 [self.sess.run(self.atrain_op,
-                               {self.tfs: bs, self.tfa: ba, self.tfadv: adv}) for _ in
+                               {self.tfs: bs, self.tfa: ba, self.tfadv: adv}) for _
+                 in
                  range(A_UPDATE_STEPS)]
-                [self.sess.run(self.ctrain_op, {self.tfs: bs, self.tfdc_r: br}) for _ in
+                [self.sess.run(self.ctrain_op, {self.tfs: bs, self.tfdc_r: br}) for _
+                 in
                  range(C_UPDATE_STEPS)]
         return self.sess.run([self.aloss, self.closs],
-                                 {self.tfs: bs, self.tfa: ba, self.tfadv: adv,
-                                  self.tfdc_r: br})
+                             {self.tfs: bs, self.tfa: ba, self.tfadv: adv,
+                              self.tfdc_r: br})
 
     def get_weights(self):
         return [self.a_variables.get_weights(), self.c_variables.get_weights()]
@@ -203,7 +207,7 @@ class DataWorker(object):
             s_, r, done, _ = self.env.step(a)
             buffer_s.append(s)
             buffer_a.append(a)
-            buffer_r.append((r + 8)/8)
+            buffer_r.append((r + 8) / 8)
             s = s_
             ep_r += r
 
@@ -223,7 +227,6 @@ class DataWorker(object):
                 # buffer_s_.append(s_)
                 # bs, ba, br = np.vstack(buffer_s), np.vstack(buffer_a), np.vstack(buffer_r)
 
-
                 transtion = np.hstack((bs, ba, br))
                 transitions.append(transtion)
 
@@ -231,6 +234,7 @@ class DataWorker(object):
 
         # print(ep_r)
         return transitions, buffer_s_
+
 
 def main():
     """
